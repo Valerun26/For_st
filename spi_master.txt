@@ -1,0 +1,125 @@
+`timescale 1ns / 1ps
+
+module spi_master(
+        (* mark_debug = "true" *) output logic 	 		enable,   // Enable
+        (* mark_debug = "true" *) input  wire	 		miso,   // MISO
+        (* mark_debug = "true" *) output logic 	 		mosi,   // MOSI
+        (* mark_debug = "true" *) output logic 	 		spi_clk,  // SPI Clk
+        
+        input wire              clk_200,
+        input wire              clk,
+        
+        input wire [9:0]        address,
+        input wire [7:0]        data_to_AD,
+        input wire              is_write,
+        
+        output logic [7:0]      data_from_AD,
+        
+        input wire              start_transmit,
+        
+        output logic            finish_transmit
+    );
+        
+    typedef enum {
+        IDLE,
+        CREATE_SPI_WORD,
+        ENABLE_TRANSMIT,
+        TRANSMIT_SPI_WORD,
+        FINISH_TRANSMIT
+    } state_t;
+
+    (* mark_debug = "true" *) state_t current_state, next_state;
+    
+    (* mark_debug = "true" *) logic [23:0] spi_word;
+    (* mark_debug = "true" *) logic [5:0] counter;
+    
+    (* mark_debug = "true" *) logic last_mosi;
+    
+    (* mark_debug = "true" *) logic need_read_200;
+    (* mark_debug = "true" *) logic [3:0] need_read_200_counter;
+
+    always @(posedge clk_200) begin
+        if (current_state == IDLE) begin
+            mosi <= 0;
+            need_read_200_counter <= 0;
+        end else begin
+            mosi <= last_mosi;
+        end
+        
+        if (need_read_200) begin
+        
+        if (need_read_200_counter < 9) begin
+            need_read_200_counter <= need_read_200_counter + 1;
+        end else begin
+            need_read_200_counter <= 0;
+        end
+            if (need_read_200_counter == 8) begin
+                data_from_AD[counter[5:1]] <= miso;
+            end
+        end
+    end
+
+    always @(posedge clk) begin
+        current_state <= next_state;
+        finish_transmit <= current_state == FINISH_TRANSMIT;
+
+        case (current_state)
+            IDLE: begin
+                enable <= 1'b1;
+                last_mosi <= 0;
+                spi_clk <= 0;
+                counter <= 49;
+                need_read_200 <= 0;
+            end
+            CREATE_SPI_WORD: begin
+                spi_word <= {is_write, 5'b0, address, data_to_AD};
+            end
+            ENABLE_TRANSMIT: begin
+                enable <= 0;
+            end
+            TRANSMIT_SPI_WORD: begin
+                    if (!counter[0] & counter > 1) begin
+                        last_mosi <= spi_word[counter[5:1] - 1]; 
+                    end
+                    if (!is_write & counter <= 16) begin
+                        need_read_200 <= 1;
+                    end else begin
+                        need_read_200 <= 0;
+                    end
+                    counter <= counter - 1;
+                    
+                    if (counter == 0) begin
+                        last_mosi <= 0;
+                    end
+                    
+                    if (counter <= 48 & counter >= 1) begin
+                        spi_clk <= ~spi_clk;
+                    end
+            end
+            FINISH_TRANSMIT: begin
+                enable <= 1'b1;
+            end
+        endcase
+    end
+    
+    always_comb begin
+        next_state = current_state;
+        
+        case (current_state)
+            IDLE:
+                if (start_transmit)
+                    next_state = CREATE_SPI_WORD;
+            CREATE_SPI_WORD:
+                next_state = ENABLE_TRANSMIT;
+            ENABLE_TRANSMIT:
+                next_state = TRANSMIT_SPI_WORD;
+            TRANSMIT_SPI_WORD:
+                if (counter == 0)
+                    next_state = FINISH_TRANSMIT;
+            FINISH_TRANSMIT: begin
+                next_state = IDLE;
+            end
+        endcase
+    end
+    
+endmodule
